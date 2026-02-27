@@ -1,0 +1,44 @@
+REQUIRED DATABASE TABLES:
+
+
+CREATE DATABASE appointments_db;
+
+USE appointments_db;
+
+CREATE TABLE appointments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    contact_number VARCHAR(50) NOT NULL,
+    appointment_date DATE NOT NULL,
+    appointment_time TIME NOT NULL,
+    consultation_type ENUM('face_to_face','online') NOT NULL,
+    status ENUM('pending','approved','rejected','completed','cancelled') DEFAULT 'pending',
+    meeting_link VARCHAR(255),
+    notes TEXT,
+    reference_code VARCHAR(100) UNIQUE,
+    cancellation_reason TEXT,
+    cancelled_by ENUM('user','admin'),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+
+CREATE TABLE admins (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    full_name VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+
+INSERT INTO appointments 
+(full_name, email, contact_number, appointment_date, appointment_time, consultation_type, status, reference_code, notes)
+VALUES
+('Chris', 'chris@gmail.com', '09123456789', '2026-03-01', '10:00:00', 'online', 'pending', 'REF001', 'Test note for Chris'),
+('Rochelle', 'rochelle@gmail.com', '09123456780', '2026-03-02', '11:00:00', 'face_to_face', 'pending', 'REF002', 'Test note for Rochelle'),
+('Russel', 'russel@gmail.com', '09123456781', '2026-03-03', '14:00:00', 'online', 'pending', 'REF003', 'Test note for Russel'),
+('Ken', 'ken@gmail.com', '09123456782', '2026-03-04', '15:30:00', 'face_to_face', 'pending', 'REF004', 'Test note for Ken'),
+('Everlyn', 'everlyn@gmail.com', '09123456783', '2026-03-05', '09:30:00', 'online', 'pending', 'REF005', 'Test note for Everlyn');
