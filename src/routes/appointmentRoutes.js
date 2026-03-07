@@ -2,9 +2,9 @@
 const express = require("express");
 const router = express.Router();
 const ctrl = require("../controllers/appointmentController");
+const verifyCaptcha = require("../middleware/verifyCaptcha");
 
-// ── Client routes ─────────────────────────────────────────
-router.post("/", ctrl.bookAppointment);
+router.post("/", verifyCaptcha, ctrl.bookAppointment);
 router.get("/check/:reference_code", ctrl.checkAppointment);
 
 // ── Admin routes ──────────────────────────────────────────
