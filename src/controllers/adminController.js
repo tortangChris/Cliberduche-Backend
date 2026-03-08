@@ -122,3 +122,29 @@ exports.completeAppointment = async (req, res) => {
     res.status(500).json({ message: "Failed to complete appointment" });
   }
 };
+// I-dagdag sa dulo ng adminController.js
+
+// Delete Appointment
+exports.deleteAppointment = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id)
+      return res.status(400).json({ message: "Appointment ID required" });
+
+    const [existing] = await pool.query(
+      "SELECT id FROM appointments WHERE id = ?",
+      [id],
+    );
+
+    if (existing.length === 0)
+      return res.status(404).json({ message: "Appointment not found" });
+
+    await pool.query("DELETE FROM appointments WHERE id = ?", [id]);
+
+    res.json({ message: "Appointment deleted successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Failed to delete appointment" });
+  }
+};

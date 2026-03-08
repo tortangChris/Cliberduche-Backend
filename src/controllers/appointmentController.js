@@ -1,6 +1,11 @@
 // controllers/appointmentController.js
 const pool = require("../config/db");
 const generateReference = require("../utils/generateReference");
+const {
+  sendApprovedEmail,
+  sendRejectedEmail,
+  sendCancelledEmail,
+} = require("../services/emailService");
 
 // ── POST /appointments ────────────────────────────────────
 // Book a new appointment (client-facing)
@@ -16,10 +21,16 @@ exports.bookAppointment = async (req, res) => {
       notes,
     } = req.body;
 
-    const today = new Date();
-    const selectedDate = new Date(appointment_date);
+    // Normalize appointment_date — strip time portion if frontend sends
+    // a full ISO string like "2026-03-29T16:00:00.000Z".
+    // We only ever store and compare the plain date "YYYY-MM-DD".
+    const normalizedDate = String(appointment_date).split("T")[0];
 
-    if (selectedDate < new Date(today.toDateString())) {
+    // String comparison (YYYY-MM-DD) avoids timezone offset bugs.
+    // new Date("2025-03-07") is UTC midnight → becomes March 6 in UTC+8,
+    // making valid future dates incorrectly fail the past-date check.
+    const todayStr = new Date().toLocaleDateString("en-CA"); // "YYYY-MM-DD" local
+    if (normalizedDate < todayStr) {
       return res.status(400).json({ message: "Cannot book past date" });
     }
 
@@ -28,7 +39,7 @@ exports.bookAppointment = async (req, res) => {
        WHERE appointment_date = ? 
        AND appointment_time = ?
        AND status IN ('pending','approved')`,
-      [appointment_date, appointment_time],
+      [normalizedDate, appointment_time],
     );
 
     if (existing.length > 0) {
@@ -46,7 +57,7 @@ exports.bookAppointment = async (req, res) => {
         full_name,
         email,
         contact_number,
-        appointment_date,
+        normalizedDate, // always plain "YYYY-MM-DD"
         appointment_time,
         consultation_type,
         notes,
@@ -84,7 +95,6 @@ exports.checkAppointment = async (req, res) => {
 
 // ── GET /appointments ─────────────────────────────────────
 // Admin: get all appointments with optional filters
-// Query params: status, consultation_type, appointment_date, search
 exports.getAllAppointments = async (req, res) => {
   try {
     const { status, consultation_type, appointment_date, search } = req.query;
@@ -96,17 +106,14 @@ exports.getAllAppointments = async (req, res) => {
       query += " AND status = ?";
       params.push(status);
     }
-
     if (consultation_type) {
       query += " AND consultation_type = ?";
       params.push(consultation_type);
     }
-
     if (appointment_date) {
       query += " AND appointment_date = ?";
       params.push(appointment_date);
     }
-
     if (search) {
       query +=
         " AND (full_name LIKE ? OR email LIKE ? OR reference_code LIKE ?)";
@@ -144,35 +151,50 @@ exports.getAppointmentById = async (req, res) => {
 };
 
 // ── PATCH /appointments/:id/approve ──────────────────────
-// Admin: approve an appointment
-// Body (online only): { meeting_link }
+// Admin: approve an appointment + send email to client
 exports.approveAppointment = async (req, res) => {
   try {
     const { id } = req.params;
     const { meeting_link } = req.body;
 
-    const [appointment] = await pool.query(
-      "SELECT * FROM appointments WHERE id = ?",
-      [id],
-    );
+    const [rows] = await pool.query("SELECT * FROM appointments WHERE id = ?", [
+      id,
+    ]);
 
-    if (appointment.length === 0)
+    if (rows.length === 0)
       return res.status(404).json({ message: "Appointment not found" });
 
-    if (appointment[0].status !== "pending")
+    const appointment = rows[0];
+
+    if (appointment.status !== "pending")
       return res
         .status(400)
         .json({ message: "Only pending appointments can be approved" });
 
-    if (appointment[0].consultation_type === "online" && !meeting_link) {
+    if (appointment.consultation_type === "online" && !meeting_link)
       return res
         .status(400)
         .json({ message: "Meeting link is required for online appointments" });
-    }
 
+    // Update DB status
     await pool.query(
       "UPDATE appointments SET status = 'approved', meeting_link = ? WHERE id = ?",
       [meeting_link || null, id],
+    );
+
+    // Build updated appointment object for the email
+    const updatedAppointment = {
+      ...appointment,
+      status: "approved",
+      meeting_link: meeting_link || null,
+    };
+
+    // Send approval email — non-blocking (won't fail the response if email fails)
+    sendApprovedEmail(updatedAppointment).catch((err) =>
+      console.error(
+        `[Email] Failed to send approval email to ${appointment.email}:`,
+        err.message,
+      ),
     );
 
     res.json({ message: "Appointment approved successfully" });
@@ -182,29 +204,45 @@ exports.approveAppointment = async (req, res) => {
 };
 
 // ── PATCH /appointments/:id/reject ───────────────────────
-// Admin: reject an appointment
-// Body (optional): { reason }
+// Admin: reject an appointment + send email to client
 exports.rejectAppointment = async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
 
-    const [appointment] = await pool.query(
-      "SELECT * FROM appointments WHERE id = ?",
-      [id],
-    );
+    const [rows] = await pool.query("SELECT * FROM appointments WHERE id = ?", [
+      id,
+    ]);
 
-    if (appointment.length === 0)
+    if (rows.length === 0)
       return res.status(404).json({ message: "Appointment not found" });
 
-    if (appointment[0].status !== "pending")
+    const appointment = rows[0];
+
+    if (appointment.status !== "pending")
       return res
         .status(400)
         .json({ message: "Only pending appointments can be rejected" });
 
+    // Update DB status
     await pool.query(
-      "UPDATE appointments SET status = 'rejected', reason = ? WHERE id = ?",
+      "UPDATE appointments SET status = 'rejected', cancellation_reason = ? WHERE id = ?",
       [reason || null, id],
+    );
+
+    // Build updated appointment object for the email
+    const updatedAppointment = {
+      ...appointment,
+      status: "rejected",
+      cancellation_reason: reason || null,
+    };
+
+    // Send rejection email — non-blocking
+    sendRejectedEmail(updatedAppointment).catch((err) =>
+      console.error(
+        `[Email] Failed to send rejection email to ${appointment.email}:`,
+        err.message,
+      ),
     );
 
     res.json({ message: "Appointment rejected" });
@@ -219,15 +257,14 @@ exports.completeAppointment = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [appointment] = await pool.query(
-      "SELECT * FROM appointments WHERE id = ?",
-      [id],
-    );
+    const [rows] = await pool.query("SELECT * FROM appointments WHERE id = ?", [
+      id,
+    ]);
 
-    if (appointment.length === 0)
+    if (rows.length === 0)
       return res.status(404).json({ message: "Appointment not found" });
 
-    if (appointment[0].status !== "approved")
+    if (rows[0].status !== "approved")
       return res
         .status(400)
         .json({ message: "Only approved appointments can be completed" });
@@ -244,22 +281,20 @@ exports.completeAppointment = async (req, res) => {
 };
 
 // ── PATCH /appointments/:id/cancel ───────────────────────
-// Admin: cancel an appointment (pending or approved)
-// Body (optional): { reason }
+// Admin: cancel a pending or approved appointment
 exports.cancelAppointment = async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
 
-    const [appointment] = await pool.query(
-      "SELECT * FROM appointments WHERE id = ?",
-      [id],
-    );
+    const [rows] = await pool.query("SELECT * FROM appointments WHERE id = ?", [
+      id,
+    ]);
 
-    if (appointment.length === 0)
+    if (rows.length === 0)
       return res.status(404).json({ message: "Appointment not found" });
 
-    if (!["pending", "approved"].includes(appointment[0].status))
+    if (!["pending", "approved"].includes(rows[0].status))
       return res
         .status(400)
         .json({
@@ -267,8 +302,21 @@ exports.cancelAppointment = async (req, res) => {
         });
 
     await pool.query(
-      "UPDATE appointments SET status = 'cancelled', reason = ? WHERE id = ?",
+      "UPDATE appointments SET status = 'cancelled', cancellation_reason = ? WHERE id = ?",
       [reason || null, id],
+    );
+
+    // Send cancellation email — non-blocking
+    const cancelledAppointment = {
+      ...rows[0],
+      status: "cancelled",
+      cancellation_reason: reason || null,
+    };
+    sendCancelledEmail(cancelledAppointment).catch((err) =>
+      console.error(
+        `[Email] Failed to send cancellation email to ${rows[0].email}:`,
+        err.message,
+      ),
     );
 
     res.json({ message: "Appointment cancelled" });

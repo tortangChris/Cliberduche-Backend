@@ -8,6 +8,7 @@ const {
   approveAppointment,
   rejectAppointment,
   completeAppointment,
+  deleteAppointment,
 } = require("../controllers/adminController");
 
 // Admin login
@@ -29,5 +30,8 @@ router.put("/appointments/:id/complete", verifyAdmin, completeAppointment);
 router.get("/", (req, res) => {
   res.json({ message: "Admin routes working" });
 });
+
+// Delete an appointment (Admin only)
+router.delete("/appointments/:id", verifyAdmin, deleteAppointment);
 
 module.exports = router;
